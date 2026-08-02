@@ -1,0 +1,37 @@
+{
+  "name": "cmd-mod-graphify",
+  "version": "1.0.0",
+  "description": "Mod communautaire Graphify pour l'assistant de code CommandCode",
+  "main": "index.ts",
+  "types": "index.ts",
+  "files": [
+    "index.ts",
+    "graphify.ts",
+    "src/"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit"
+  },
+  "keywords": [
+    "commandcode",
+    "mod",
+    "cmd-mod",
+    "graphify",
+    "knowledge-graph",
+    "ast",
+    "code-intelligence"
+  ],
+  "author": "m4t0t0",
+  "license": "MIT",
+  "peerDependencies": {
+    "@commandcode/harness": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

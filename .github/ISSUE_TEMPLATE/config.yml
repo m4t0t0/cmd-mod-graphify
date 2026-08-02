@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Graphify Documentation
+    url: https://github.com/Graphify-Labs/graphify
+    about: Official Graphify CLI documentation and repository
+  - name: 💬 CommandCode Mods Documentation
+    url: https://commandcode.ai/docs/mods
+    about: Official CommandCode Mods API documentation
