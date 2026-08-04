@@ -1,6 +1,6 @@
 {
   "name": "cmd-mod-graphify",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Mod communautaire Graphify pour l'assistant de code CommandCode",
   "main": "index.ts",
   "types": "index.ts",
