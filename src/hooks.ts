@@ -12,12 +12,14 @@ export function registerLifecycleHooks(cmd: ModApi, cliService: GraphifyCliServi
       const trimmed = (input || '').trim();
       if (trimmed.startsWith('@graph ')) {
         const query = trimmed.substring(7).trim();
+        if (!query) return undefined;
         return {
           userPrompt: `Use graphify_query tool to find graph relationships for: "${query}", then answer the prompt.`,
         };
       }
       if (trimmed.startsWith('@explain ')) {
         const concept = trimmed.substring(9).trim();
+        if (!concept) return undefined;
         return {
           userPrompt: `Use graphify_explain tool to analyze symbol "${concept}" and explain its connections.`,
         };

@@ -1,9 +1,38 @@
 import type { ModApi } from '@commandcode/harness';
 import * as fs from 'fs';
 import { GraphifyCliService } from './cli';
+import { enhanceHtml } from './enhance';
 import { extractArgsString, getErrorMessage, isDomainNode } from './types';
 
 const MAX_REPORT_SIZE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Enrich a raw CLI error with actionable recovery context.
+ */
+function enrichError(raw: string, context: 'build' | 'query' | 'explain' | 'export'): string {
+  const first = (raw || '').split('\n').filter(l => l.trim())[0] || '';
+  if (!first) {
+    if (context === 'build') return 'No output from Graphify CLI. Check that Python and Graphify are installed: uv tool install graphifyy';
+    if (context === 'explain') return 'No output from Graphify CLI. The symbol may not exist in the graph. Run /graphify first, then check the symbol name with /graphify-nodes.';
+    return 'No output from Graphify CLI. Run /graphify first to build the graph.';
+  }
+  if (first.includes('not found') || first.includes('ENOENT') || first.includes('No such file')) {
+    return `Graphify CLI not found on PATH. Install it with: uv tool install graphifyy\n\nDetail: ${first}`;
+  }
+  if (first.includes('no LLM API key')) {
+    return `No LLM API key detected. This mod defaults to --code-only mode (local AST, no key needed).\n\nDetail: ${first}`;
+  }
+  if (first.includes('Permission denied') || first.includes('EACCES')) {
+    return `Permission denied. Check file permissions in the project directory.\n\nDetail: ${first}`;
+  }
+  if (first.includes('graph.json') && first.includes('not found')) {
+    return `No graph data found. Run /graphify first to build the knowledge graph.\n\nDetail: ${first}`;
+  }
+  if (context === 'explain' && (first.includes('no node') || first.includes('not found in') || first.includes('unknown') || first.includes('empty'))) {
+    return `Symbol not found in the knowledge graph. Try /graphify-nodes <name> to search for similar symbols.\n\nDetail: ${first}`;
+  }
+  return first;
+}
 
 /**
  * Extract traversal stats from raw Graphify CLI output.
@@ -35,7 +64,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
       // 1. Instant feed entry
       cmd.showEntry?.('graphify_result', {
         title: `Building Knowledge Graph (${targetPath})`,
-        content: `⏳ Running Graphify AST parser on '${targetPath}'... Please wait.`,
+        content: `⏳ Running Graphify AST parser on '${targetPath}'...`,
         type: 'build',
       });
       cmd.ui.notify?.('⏳ Graphify: Building knowledge graph...');
@@ -57,13 +86,14 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
         cmd.ui.notify?.(`✅ Graphify: Built — ${n} domain nodes, ${e} edges.`);
         return { message: `🕸️ Graphify: Built successfully — ${n} domain nodes, ${e} edges.` };
       } else {
+        const enriched = enrichError(res.error || '', 'build');
         cmd.showEntry?.('graphify_result', {
           title: `Build Failed (${targetPath})`,
-          content: res.error || 'Build failed.',
+          content: enriched,
           type: 'build',
         });
-        cmd.ui.notify?.('⚠ Graphify: Build failed.');
-        return { message: `⚠ Graphify build failed: ${(res.error || '').split('\n')[0]}` };
+        cmd.ui.notify?.('⚠ Graphify: Build failed. See feed for details.');
+        return { message: `⚠ Graphify build failed: ${enriched.split('\n')[0]}` };
       }
     },
   });
@@ -120,7 +150,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
         });
         return { message: `🙈 Added ${patterns.length} pattern(s) to .graphifyignore. Run /graphify-update to apply.` };
       } else {
-        return { message: `⚠ Failed to update .graphifyignore at ${ignorePath}` };
+        return { message: `⚠ Failed to update .graphifyignore at ${ignorePath}. Check write permissions at the project root.` };
       }
     },
   });
@@ -157,12 +187,13 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
         cmd.ui.notify?.(`✅ Graphify: Graph updated — ${n} domain nodes, ${e} edges.`);
         return { message: `🔄 Graphify: Graph updated — ${n} domain nodes, ${e} edges.` };
       } else {
+        const enriched = enrichError(res.error || '', 'build');
         cmd.showEntry?.('graphify_result', {
           title: `Update Failed (${targetPath})`,
-          content: res.error || 'Update failed.',
+          content: enriched,
           type: 'build',
         });
-        return { message: `⚠ Graphify update failed: ${(res.error || '').split('\n')[0]}` };
+        return { message: `⚠ Graphify update failed: ${enriched.split('\n')[0]}` };
       }
     },
   });
@@ -183,7 +214,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
         cmd.ui.notify?.('🗑️ Graphify: Cache cleared.');
         return { message: '🗑️ Graphify: Cache cleared.' };
       } else {
-        return { message: '⚠ Graphify: Failed to clean cache.' };
+        return { message: '⚠ Graphify: Failed to clean cache. Check that graphify-out/ exists and is not locked by another process.' };
       }
     },
   });
@@ -221,7 +252,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
           prompt: `The user asked: "${queryStr}"\n\nBelow is the Graphify knowledge graph subgraph result (traversed from graphify-out/graph.json). Analyze the nodes, edges, and relationships to provide a clear, structured answer to the user's question. Focus on architecture, data flow, and key dependencies:\n\n${res.output}`,
         };
       }
-      return { message: `⚠ Graphify query failed: ${(res.error || '').split('\n')[0]}` };
+      return { message: `⚠ Graphify query failed: ${enrichError(res.error || '', 'query')}` };
     },
   });
 
@@ -253,11 +284,19 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
           ? `🕸️ Graph: ${stats} for "${targetConcept}" — sending to AI...`
           : `🕸️ Graph: Found "${targetConcept}" — sending to AI...`
         );
+        // Show raw graph data in feed so user can see connections
+        if (res.output) {
+          cmd.showEntry?.('graphify_result', {
+            title: `Connections: ${targetConcept}`,
+            content: res.output,
+            type: 'explain',
+          });
+        }
         return {
           prompt: `The user wants to understand the symbol/concept "${targetConcept}".\n\nBelow is the Graphify knowledge graph data (from graphify-out/graph.json) showing its connections, imports, calls, and relationships. Provide a clear explanation of what this symbol does, how it connects to the rest of the codebase, and its role in the architecture:\n\n${res.output}`,
         };
       }
-      return { message: `⚠ Graphify explain failed: ${(res.error || '').split('\n')[0]}` };
+      return { message: `⚠ Graphify explain failed: ${enrichError(res.error || '', 'explain')}` };
     },
   });
 
@@ -290,7 +329,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
           prompt: `The user wants to understand the dependency chain between "${conceptA}" and "${conceptB}".\n\nBelow is the Graphify shortest path result (from graphify-out/graph.json). Explain each step in the chain and what connects these two symbols:\n\n${res.output}`,
         };
       }
-      return { message: `⚠ Graphify path failed: ${(res.error || '').split('\n')[0]}` };
+      return { message: `⚠ Graphify path failed: ${enrichError(res.error || '', 'query')}` };
     },
   });
 
@@ -303,6 +342,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
       if (!fs.existsSync(htmlPath)) {
         return { message: '⚠ Graphify: No graph.html yet. Run /graphify first.' };
       }
+      enhanceHtml(htmlPath);
       const success = await cliService.openInBrowser(htmlPath);
       return { message: success ? `🌐 Graphify: Opened graph.html in browser.` : `🌐 Graphify: file://${htmlPath}` };
     },
@@ -400,13 +440,14 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
       if (res.ok) {
         const treePath = cliService.getOutFilePath('GRAPH_TREE.html');
         if (fs.existsSync(treePath)) {
+          enhanceHtml(treePath);
           await cliService.openInBrowser(treePath);
           cmd.ui.notify?.('🌳 Graphify: Tree opened in browser.');
           return { message: '🌳 Graphify: Collapsible tree generated and opened in browser.' };
         }
         return { message: '🌳 Graphify: Tree generated in graphify-out/GRAPH_TREE.html.' };
       }
-      return { message: `⚠ Graphify tree failed: ${(res.error || '').split('\n')[0]}` };
+      return { message: `⚠ Graphify tree failed: ${enrichError(res.error || '', 'export')}` };
     },
   });
 
@@ -432,6 +473,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
           const files = fs.readdirSync(outDir).filter((f: string) => f.includes('callflow') && f.endsWith('.html'));
           if (files.length > 0) {
             const callflowPath = cliService.getOutFilePath(files[0]);
+            enhanceHtml(callflowPath);
             await cliService.openInBrowser(callflowPath);
             cmd.ui.notify?.('📊 Graphify: Call-flow diagram opened in browser.');
             return { message: `📊 Graphify: Call-flow diagram generated and opened (${files[0]}).` };
@@ -441,7 +483,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
         }
         return { message: '📊 Graphify: Call-flow diagram generated in graphify-out/.' };
       }
-      return { message: `⚠ Graphify call-flow failed: ${(res.error || '').split('\n')[0]}` };
+      return { message: `⚠ Graphify call-flow failed: ${enrichError(res.error || '', 'export')}` };
     },
   });
 
@@ -471,7 +513,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
           prompt: `The user wants to see the most connected architectural hub nodes ("god-nodes") in their codebase. Present the following Graphify god-nodes analysis clearly, highlighting which files are the most critical:\n\n${res.output}`,
         };
       }
-      return { message: `⚠ Graphify god-nodes failed: ${(res.error || '').split('\n')[0]}` };
+      return { message: `⚠ Graphify god-nodes failed: ${enrichError(res.error || '', 'query')}` };
     },
   });
 
@@ -552,7 +594,7 @@ export function registerSlashCommands(cmd: ModApi, cliService: GraphifyCliServic
           message: `📝 Graphify: Wiki generated — ${sortedCommunities.length} communities, ${domainNodes.length} domain nodes → graphify-out/WIKI.md`,
         };
       } catch (e: unknown) {
-        return { message: `⚠ Graphify wiki write failed: ${getErrorMessage(e)}` };
+        return { message: `⚠ Graphify wiki write failed: ${getErrorMessage(e)}. Check disk space and write permissions in graphify-out/.` };
       }
     },
   });
