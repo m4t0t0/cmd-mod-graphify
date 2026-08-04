@@ -1,24 +1,10 @@
 import type { ModApi } from '@commandcode/harness';
 import * as fs from 'fs';
 import { GraphifyCliService } from './cli';
-import { getErrorMessage } from './types';
+import { getErrorMessage, isDomainNode } from './types';
+import { enhanceHtml } from './enhance';
 
 const MAX_REPORT_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB safety cap
-
-/**
- * Filter out noisy node_modules / minified artifacts from graph nodes
- */
-function isDomainNode(node: { id?: string; source?: string }): boolean {
-  if (!node || typeof node.id !== 'string') return false;
-  if (node.source && (node.source.includes('node_modules') || node.source.includes('.min.js'))) {
-    return false;
-  }
-  // Ignore single letter functions like t(), o(), i()
-  if (/^[a-zA-Z]\(\)$/.test(node.id.trim())) {
-    return false;
-  }
-  return true;
-}
 
 /**
  * Register Native AI Model Tools for Graphify (including update & clean)
@@ -129,7 +115,11 @@ export function registerAiTools(cmd: ModApi, cliService: GraphifyCliService) {
       },
     },
     run: async (input: { concept: string }) => {
-      const res = await cliService.exec(['explain', input.concept || '']);
+      const concept = (input.concept || '').trim();
+      if (!concept) {
+        return { ok: false, error: 'Missing required parameter: concept. Provide a symbol, class, or function name to explain.' };
+      }
+      const res = await cliService.exec(['explain', concept]);
       if (res.ok) {
         return { ok: true, content: [{ type: 'text', text: res.output || '' }] };
       }
@@ -254,6 +244,8 @@ export function registerAiTools(cmd: ModApi, cliService: GraphifyCliService) {
     run: async () => {
       const res = await cliService.exec(['tree']);
       if (res.ok) {
+        const treePath = cliService.getOutFilePath('GRAPH_TREE.html');
+        enhanceHtml(treePath);
         return { ok: true, content: [{ type: 'text', text: `Tree generated at graphify-out/GRAPH_TREE.html\n${res.output || ''}` }] };
       }
       return { ok: false, error: res.error };
@@ -270,6 +262,11 @@ export function registerAiTools(cmd: ModApi, cliService: GraphifyCliService) {
     run: async () => {
       const res = await cliService.exec(['export', 'callflow-html']);
       if (res.ok) {
+        try {
+          const outDir = cliService.getOutDir();
+          const files = fs.readdirSync(outDir).filter((f: string) => f.includes('callflow') && f.endsWith('.html'));
+          if (files.length > 0) enhanceHtml(cliService.getOutFilePath(files[0]));
+        } catch { /* ignore */ }
         return { ok: true, content: [{ type: 'text', text: `Call-flow diagram generated in graphify-out/\n${res.output || ''}` }] };
       }
       return { ok: false, error: res.error };
